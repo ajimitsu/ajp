@@ -9,7 +9,7 @@ class CustomError(Exception):
 def log_function_call(func: Callable):
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        print(f"[LOG] Calling {func.__name__} with args={args}, kwargs={kwargs}")
+        print(f"[LOG]  Calling {func.__name__} with args={args}, kwargs={kwargs}")
         return func(*args, **kwargs)
     return wrapper
 
