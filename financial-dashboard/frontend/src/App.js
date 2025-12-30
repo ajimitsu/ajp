@@ -30,7 +30,7 @@ function App() {
   const [result, setResult] = useState(null);
   const [activeTab, setActiveTab] = useState('pnl');
 
-  const API_URL = "http://localhost:8001/api";
+  const API_URL = process.env.REACT_APP_API_URL || "http://localhost:8001/api";
 
   const handleSubmit = async () => {
     const formData = new FormData();
