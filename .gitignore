@@ -1,2 +1,4 @@
 /.env
 /financial-dashboard/backend/financial_app.db
+/financial-dashboard/frontend/.env
+/run-dashboard/.env

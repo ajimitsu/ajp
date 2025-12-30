@@ -1,0 +1,26 @@
+version: '3.8'
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./backend:/app
+      - sqlite_data:/app/data
+    env_file:
+      - .env
+    environment:
+      - USE_REAL_GARMIN=True
+      - DB_PATH=/app/data/running_log.db
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend/src:/app/src
+    stdin_open: true
+    tty: true
+    depends_on:
+      - backend
+volumes:
+  sqlite_data:
