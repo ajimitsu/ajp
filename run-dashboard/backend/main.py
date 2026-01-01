@@ -191,6 +191,7 @@ def fetch_garmin_details(activity_id):
         cadence = current_metrics.get('directRunCadence') or current_metrics.get('directCadence')
         stride = current_metrics.get('directStrideLength')  # cm
         if stride is None and speed_mps and cadence and cadence > 0:
+            cadence = cadence * 2
             # (m/s * 60) / spm = m/step.  それを * 100 して cm に変換
             stride = (speed_mps * 60 / cadence) * 100
 

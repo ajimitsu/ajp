@@ -6,11 +6,12 @@ function ActivityDetail({ activityId, onClose }) {
   const [streams, setStreams] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const API_URL = process.env.REACT_APP_API_URL || "http://localhost:8002/api";
 
   useEffect(() => {
     setLoading(true);
     // 詳細データ取得APIを叩く
-    axios.get(`http://localhost:8002/api/activity/${activityId}`)
+    axios.get(`${API_URL}/activity/${activityId}`)
       .then(response => {
         setStreams(response.data.streams);
         setLoading(false);
@@ -73,7 +74,25 @@ function ActivityDetail({ activityId, onClose }) {
                   <XAxis dataKey="time_min" type="number" domain={['dataMin', 'dataMax']} label={{ value: 'Time (min)', position: 'insideBottom', offset: -5 }}/>
                   {/* ペースは反転させた方が直感的 */}
                   <YAxis yAxisId="right" domain={['auto', 'auto']} reversed={true} tickFormatter={formatPace} />
-                  <Tooltip content={<CustomTooltip />} />
+                      <Tooltip
+                  // 横軸（時間）の表示も見やすくする
+                  labelFormatter={(label) => `Time: ${label} min`}
+
+                  // ★ ここがキモだ！値と名前を見て、ペースなら変換する
+                  formatter={(value, name) => {
+                    // <Line name="Pace" ...> と設定しているなら name は "Pace" になる
+                    // 念のため "pace_min_km" も対象に入れておく（安全策）
+                    if (name === 'Pace' || name === 'pace_min_km') {
+                      // [変換後の値, ラベル名] を返す
+                      return [formatPace(value), 'Pace (min/km)'];
+                    }
+                    // 心拍数などはそのまま返す
+                    return [value, name];
+                  }}
+
+                  // ついでに見た目も少し整える（お好みで）
+                  contentStyle={{ backgroundColor: '#fff', borderRadius: '5px', border: '1px solid #ccc' }}
+                />
                   <Line type="monotone" yAxisId="right" dataKey="pace_min_km" stroke="#82ca9d" dot={false} name="Pace" unit="min/km" strokeWidth={2}/>
                 </LineChart>
               </ResponsiveContainer>
