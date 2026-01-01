@@ -10,7 +10,7 @@ function ActivityDetail({ activityId, onClose }) {
   useEffect(() => {
     setLoading(true);
     // 詳細データ取得APIを叩く
-    axios.get(`http://localhost:8000/api/activity/${activityId}`)
+    axios.get(`http://localhost:8002/api/activity/${activityId}`)
       .then(response => {
         setStreams(response.data.streams);
         setLoading(false);
@@ -21,6 +21,15 @@ function ActivityDetail({ activityId, onClose }) {
         setLoading(false);
       });
   }, [activityId]);
+
+  // 10進法のペースを「分:秒」に変換する関数
+  const formatPace = (decimal) => {
+    if (!decimal || decimal === 0 || !isFinite(decimal)) return "--:--";
+    const totalSeconds = Math.round(decimal * 60);
+    const min = Math.floor(totalSeconds / 60);
+    const sec = totalSeconds % 60;
+    return `${min}:${sec.toString().padStart(2, '0')}`;
+  };
 
   // ツールチップのカスタマイズ（複数グラフで同期表示させるためシンプルに）
   const CustomTooltip = ({ active, payload, label }) => {
@@ -63,9 +72,9 @@ function ActivityDetail({ activityId, onClose }) {
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="time_min" type="number" domain={['dataMin', 'dataMax']} label={{ value: 'Time (min)', position: 'insideBottom', offset: -5 }}/>
                   {/* ペースは反転させた方が直感的 */}
-                  <YAxis domain={['auto', 'auto']} reversed={true}/>
+                  <YAxis yAxisId="right" domain={['auto', 'auto']} reversed={true} tickFormatter={formatPace} />
                   <Tooltip content={<CustomTooltip />} />
-                  <Line type="monotone" dataKey="pace_min_km" stroke="#82ca9d" dot={false} name="Pace" unit="min/km" strokeWidth={2}/>
+                  <Line type="monotone" yAxisId="right" dataKey="pace_min_km" stroke="#82ca9d" dot={false} name="Pace" unit="min/km" strokeWidth={2}/>
                 </LineChart>
               </ResponsiveContainer>
             </div>

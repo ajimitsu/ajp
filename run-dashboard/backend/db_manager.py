@@ -12,12 +12,36 @@ def init_db():
     c.execute('''
         CREATE TABLE IF NOT EXISTS activities (
             activity_id INTEGER PRIMARY KEY,
+            runner_id TEXT,
+            runner_name TEXT,
+            activity_name TEXT,
+            description TEXT,
+            activity_type TEXT,
+            trainning_effect_label TEXT,
+            aerobic_te_message TEXT,
+            anaerobic_te_message TEXT,            
             date TEXT,
             distance_km REAL,
             duration_min REAL,
             avg_hr REAL,
             pace_min_km REAL,
+            avg_pitch_spm REAL,
+            avg_stride_cm REAL,
+            calories REAL,
             speed_m_min REAL,
+            fastestSplit_1km REAL,
+            fastestSplit_1mile REAL,
+            fastestSplit_5km REAL,
+            fastestSplit_10km REAL,
+            elevation_gain REAL,
+            elevation_loss REAL,
+            hr_z1 REAL,
+            hr_z2 REAL,
+            hr_z3 REAL,
+            hr_z4 REAL,
+            hr_z5 REAL,
+            aerobic_te REAL,
+            anaerobic_te REAL,
             efficiency_score REAL
         )
     ''')
@@ -41,9 +65,43 @@ def save_activities(activities_list):
         try:
             c.execute('''
                 INSERT OR IGNORE INTO activities 
-                (activity_id, date, distance_km, duration_min, avg_hr, pace_min_km, speed_m_min, efficiency_score)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (a['activity_id'], a['date'], a['distance_km'], a['duration_min'], a['avg_hr'], a['pace_min_km'], a['speed_m_min'], a['efficiency_score']))
+                (activity_id,runner_id,runner_name,activity_name,description,activity_type,trainning_effect_label,aerobic_te_message,anaerobic_te_message,date,distance_km,duration_min,avg_hr,pace_min_km,avg_pitch_spm,avg_stride_cm,calories,speed_m_min,fastestSplit_1km,fastestSplit_1mile,fastestSplit_5km,fastestSplit_10km,elevation_gain,elevation_loss,hr_z1,hr_z2,hr_z3,hr_z4,hr_z5,aerobic_te,anaerobic_te,efficiency_score)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ''', (
+                    a['activity_id'],
+                    a['runner_id'],
+                    a['runner_name'],
+                    a['activity_name'],
+                    a['description'],
+                    a['activity_type'],
+                    a['trainning_effect_label'],
+                    a['aerobic_te_message'],
+                    a['anaerobic_te_message'],
+                    a['date'],
+                    a['distance_km'],
+                    a['duration_min'],
+                    a['avg_hr'],
+                    a['pace_min_km'],
+                    a['avg_pitch_spm'],
+                    a['avg_stride_cm'],
+                    a['calories'],
+                    a['speed_m_min'],
+                    a['fastestSplit_1000'],
+                    a['fastestSplit_1609'],
+                    a['fastestSplit_5000'],
+                    a['fastestSplit_10000'],
+                    a['elevation_gain'],
+                    a['elevation_loss'],
+                    a['hr_z1'],
+                    a['hr_z2'],
+                    a['hr_z3'],
+                    a['hr_z4'],
+                    a['hr_z5'],
+                    a['aerobic_te'],
+                    a['anaerobic_te'],
+                    a['efficiency_score']
+                )
+            )
             if c.rowcount > 0: count += 1
         except Exception as e: print(f"Error saving activity: {e}")
     conn.commit()
@@ -52,7 +110,7 @@ def save_activities(activities_list):
 
 def get_all_activities():
     conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql("SELECT * FROM activities ORDER BY date ASC", conn)
+    df = pd.read_sql("SELECT * FROM activities WHERE distance_km >= 1.0 ORDER BY date ASC", conn)
     conn.close()
     return df
 
