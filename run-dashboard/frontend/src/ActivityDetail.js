@@ -1,6 +1,34 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import {
+  LineChart,
+  ComposedChart, // LineChartから格上げ
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  ReferenceArea, // 背景色用
+  Legend
+} from 'recharts';
+
+// --- 1. 心拍ゾーンの定義 (自分の閾値に書き換えろ！) ---
+// y1: 下限, y2: 上限, fill: 色, label: 表示名
+const HR_ZONES = [
+  { zone: 'Z0', y1: 0,   y2: 119, fill: '#e0e0e0', label: 'Z1: Recovery' }, // グレー
+  { zone: 'Z1', y1: 120, y2: 132, fill: '#e0e0e0', label: 'Z1: Recovery' }, // グレー
+  { zone: 'Z2', y1: 133, y2: 145, fill: '#add8e6', label: 'Z2: Aerobic' },  // 水色
+  { zone: 'Z3', y1: 146, y2: 156, fill: '#90ee90', label: 'Z3: Tempo' },    // 薄緑
+  { zone: 'Z4', y1: 157, y2: 169, fill: '#ffd700', label: 'Z4: Threshold'}, // 金色
+  { zone: 'Z5', y1: 170, y2: 220, fill: '#ffcccb', label: 'Z5: Anaerobic'}  // 薄赤
+];
+
+// --- 2. ペース軸の目盛りを定義 (3:30 ～ 10:00) ---
+// 0.5刻み (30秒刻み) で定義する
+const PACE_TICKS = [3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5, 8.0, 8.5, 9.0, 9.5, 10.0];
+
+
 
 function ActivityDetail({ activityId, onClose }) {
   const [streams, setStreams] = useState(null);
@@ -71,12 +99,12 @@ function ActivityDetail({ activityId, onClose }) {
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart {...commonChartProps}>
                   <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="time_min" type="number" domain={['dataMin', 'dataMax']} label={{ value: 'Time (min)', position: 'insideBottom', offset: -5 }}/>
+                  <XAxis dataKey="time_min" type="number" domain={['dataMin', 'dataMax']} label={{ value: 'Time (min)', position: 'insideBottom', offset: -5 }} tickFormatter={formatPace} />
                   {/* ペースは反転させた方が直感的 */}
                   <YAxis yAxisId="right" domain={['auto', 'auto']} reversed={true} tickFormatter={formatPace} />
                       <Tooltip
                   // 横軸（時間）の表示も見やすくする
-                  labelFormatter={(label) => `Time: ${label} min`}
+                  labelFormatter={(label) => `Time: ${formatPace(label)} min`}
 
                   // ★ ここがキモだ！値と名前を見て、ペースなら変換する
                   formatter={(value, name) => {
@@ -104,7 +132,7 @@ function ActivityDetail({ activityId, onClose }) {
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart {...commonChartProps}>
                   <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="time_min" hide={true}/> {/* 中間のX軸は隠す */}
+                  <XAxis dataKey="time_min" hide={true} tickFormatter={formatPace}/> {/* 中間のX軸は隠す */}
                   <YAxis domain={['auto', 'auto']} />
                   <Tooltip content={<CustomTooltip />} />
                   <Line type="monotone" dataKey="hr" stroke="#ff7300" dot={false} name="HR" unit="bpm" strokeWidth={2}/>
@@ -118,7 +146,7 @@ function ActivityDetail({ activityId, onClose }) {
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart {...commonChartProps}>
                   <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="time_min" hide={true}/>
+                  <XAxis dataKey="time_min" hide={true} tickFormatter={formatPace} />
                   <YAxis domain={['auto', 'auto']} />
                   <Tooltip content={<CustomTooltip />} />
                   <Line type="monotone" dataKey="cadence" stroke="#8884d8" dot={false} name="Cadence" unit="spm" />
@@ -132,7 +160,7 @@ function ActivityDetail({ activityId, onClose }) {
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart {...commonChartProps}>
                   <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="time_min" hide={true}/>
+                  <XAxis dataKey="time_min" hide={true} tickFormatter={formatPace} />
                   <YAxis domain={['auto', 'auto']} />
                   <Tooltip content={<CustomTooltip />} />
                   <Line type="monotone" dataKey="stride_m" stroke="#ffc658" dot={false} name="Stride" unit="m" />
