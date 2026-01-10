@@ -3,10 +3,9 @@ import pandas as pd
 import os
 import json
 
-DB_PATH = os.getenv("DB_PATH", "running_log.db")
 
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
+def init_db(db_file_path: str):
+    conn = sqlite3.connect(db_file_path)
     c = conn.cursor()
     # サマリー用テーブル
     c.execute('''
@@ -42,7 +41,8 @@ def init_db():
             hr_z5 REAL,
             aerobic_te REAL,
             anaerobic_te REAL,
-            efficiency_score REAL
+            efficiency_score REAL,
+            trimp REAL
         )
     ''')
     # 詳細ストリームデータ用テーブル（巨大なJSONとして保存）
@@ -56,17 +56,17 @@ def init_db():
     conn.close()
 
 # --- サマリー系 ---
-def save_activities(activities_list):
+def save_activities(activities_list, db_file_path: str):
     if not activities_list: return 0
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(db_file_path)
     c = conn.cursor()
     count = 0
     for a in activities_list:
         try:
             c.execute('''
                 INSERT OR IGNORE INTO activities 
-                (activity_id,runner_id,runner_name,activity_name,description,activity_type,trainning_effect_label,aerobic_te_message,anaerobic_te_message,date,distance_km,duration_min,avg_hr,pace_min_km,avg_pitch_spm,avg_stride_cm,calories,speed_m_min,fastestSplit_1km,fastestSplit_1mile,fastestSplit_5km,fastestSplit_10km,elevation_gain,elevation_loss,hr_z1,hr_z2,hr_z3,hr_z4,hr_z5,aerobic_te,anaerobic_te,efficiency_score)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                (activity_id,runner_id,runner_name,activity_name,description,activity_type,trainning_effect_label,aerobic_te_message,anaerobic_te_message,date,distance_km,duration_min,avg_hr,pace_min_km,avg_pitch_spm,avg_stride_cm,calories,speed_m_min,fastestSplit_1km,fastestSplit_1mile,fastestSplit_5km,fastestSplit_10km,elevation_gain,elevation_loss,hr_z1,hr_z2,hr_z3,hr_z4,hr_z5,aerobic_te,anaerobic_te,efficiency_score,trimp)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ''', (
                     a['activity_id'],
                     a['runner_id'],
@@ -99,7 +99,8 @@ def save_activities(activities_list):
                     a['hr_z5'],
                     a['aerobic_te'],
                     a['anaerobic_te'],
-                    a['efficiency_score']
+                    a['efficiency_score'],
+                    a['trimp']
                 )
             )
             if c.rowcount > 0: count += 1
@@ -108,23 +109,23 @@ def save_activities(activities_list):
     conn.close()
     return count
 
-def get_all_activities():
-    conn = sqlite3.connect(DB_PATH)
+def get_all_activities(db_file_path):
+    conn = sqlite3.connect(db_file_path)
     df = pd.read_sql("SELECT * FROM activities WHERE distance_km >= 1.0 ORDER BY date ASC", conn)
     conn.close()
     return df
 
 # --- 詳細ストリーム系 ---
-def get_activity_stream(activity_id):
-    conn = sqlite3.connect(DB_PATH)
+def get_activity_stream(activity_id, db_file_path):
+    conn = sqlite3.connect(db_file_path)
     c = conn.cursor()
     c.execute("SELECT streams_json FROM activity_streams WHERE activity_id = ?", (activity_id,))
     result = c.fetchone()
     conn.close()
     return json.loads(result[0]) if result else None
 
-def save_activity_stream(activity_id, streams_data):
-    conn = sqlite3.connect(DB_PATH)
+def save_activity_stream(activity_id, streams_data, db_file_path):
+    conn = sqlite3.connect(db_file_path)
     c = conn.cursor()
     # JSON文字列として保存
     c.execute("INSERT OR REPLACE INTO activity_streams (activity_id, streams_json) VALUES (?, ?)",

@@ -4,3 +4,7 @@ pandas
 garminconnect
 pydantic
 numpy
+passlib[bcrypt]
+python-jose
+python-multipart
+bcrypt==3.2.2

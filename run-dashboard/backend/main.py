@@ -1,5 +1,6 @@
-from fastapi import FastAPI, BackgroundTasks, HTTPException
+from fastapi import FastAPI, BackgroundTasks, HTTPException, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 import os
 import random
 import numpy as np
@@ -9,6 +10,24 @@ import pandas as pd
 from db_manager import init_db, save_activities, get_all_activities, get_activity_stream, save_activity_stream
 import traceback
 import math
+import sqlite3
+import shutil
+from pydantic import BaseModel
+from passlib.context import CryptContext
+from jose import JWTError, jwt
+
+# --- 設定 ---
+SECRET_KEY = "supersecretkey_change_me" # 本番では絶対に変えろ！
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+# --- トレーニング設定 (Ramos Config) ---
+USER_MAX_HR = 184   # 仮の値
+USER_REST_HR = 51   # 仮の値
+MALE_GENDER = True  # 男ならTrue, 女ならFalse (係数が違う)
+
+# パスワードハッシュ化設定
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 app = FastAPI()
 
@@ -20,9 +39,105 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.on_event("startup")
-def on_startup():
-    init_db()
+
+# --- データベース接続ヘルパー ---
+
+# 1. マスターDB（会員名簿）への接続
+def get_master_db():
+    conn = sqlite3.connect("master_users.db")
+    conn.row_factory = sqlite3.Row
+    return conn
+
+# 2. マスターテーブル作成（初回のみ実行）
+def init_master_db():
+    conn = get_master_db()
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE,
+            hashed_password TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+init_master_db()
+
+# --- 認証ロジック ---
+
+# パスワード検証
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
+
+# パスワードハッシュ化
+def get_password_hash(password):
+    return pwd_context.hash(password)
+
+# トークン生成
+def create_access_token(data: dict):
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+class UserCreate(BaseModel):
+    username: str
+    password: str
+
+@app.post("/register")
+def register(user: UserCreate):
+    conn = get_master_db()
+    try:
+        # 1. パスワードをハッシュ化してマスターDBに保存
+        hashed_pw = get_password_hash(user.password)
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO users (username, hashed_password) VALUES (?, ?)", (user.username, hashed_pw))
+        conn.commit()
+        user_id = cursor.lastrowid
+
+        # 2. ★ここが重要！ そのユーザ専用のDBファイルを作成
+        # テンプレート（空のDB）をコピーして、user_{id}.db を作る
+        # テンプレートには 'activities' などのテーブル定義だけが入っている前提
+        db_filename = f"user_data_{user_id}.db"
+        init_db(db_filename)
+
+        return {"msg": "User created successfully", "user_id": user_id}
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=400, detail="Username already registered")
+    finally:
+        conn.close()
+
+
+# --- ログイン用API ---
+
+@app.post("/token")
+def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    conn = get_master_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users WHERE username = ?", (form_data.username,))
+    user = cursor.fetchone()
+    conn.close()
+
+    if not user or not verify_password(form_data.password, user['hashed_password']):
+        raise HTTPException(status_code=400, detail="Incorrect username or password")
+
+    # トークンに user_id を埋め込む
+    access_token = create_access_token(data={"sub": user['username'], "uid": user['id']})
+    return {"access_token": access_token, "token_type": "bearer"}
+
+
+# --- ★重要: 依存関係注入 (Dependency Injection) ---
+async def get_current_user_id(token: str = Depends(oauth2_scheme)):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id: int = payload.get("uid")
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+        return user_id
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Could not validate credentials")
+
 
 # --- Garmin Client Helper ---
 def get_garmin_client():
@@ -37,13 +152,42 @@ def get_garmin_client():
         print(f"Garmin Login Error: {e}")
         return None
 
+
+def calculate_trimp(duration_min, avg_hr):
+    """
+    TRIMP (Training Impulse) を計算する関数
+    Banister's TRIMP formulaを使用
+    """
+    if not duration_min or not avg_hr or avg_hr < USER_REST_HR:
+        return 0.0
+
+    # 心拍予備能 (Heart Rate Reserve) の割合
+    hrr_ratio = (avg_hr - USER_REST_HR) / (USER_MAX_HR - USER_REST_HR)
+
+    # 男女で係数が違う
+    b = 1.92 if MALE_GENDER else 1.67
+
+    # 公式: 時間(分) x 強度 x 指数関数的重み付け
+    trimp = duration_min * hrr_ratio * 0.64 * math.exp(b * hrr_ratio)
+
+    return trimp
+
 # --- サマリー同期 ---
-def fetch_and_sync_garmin():
+def fetch_and_sync_garmin(user_id: int):
+    print(f"--- [Background Task] Starting Sync for User ID: {user_id} ---")  # ログ追加
+
+    db_file = f"user_data_{user_id}.db"
+    if not os.path.exists(db_file):
+        return []  # まだデータがない場合
+
     client = get_garmin_client()
-    if not client: return 0
+    if not client:
+        print("Garmin Client is None. Check env vars.")
+        return 0
     try:
         # 直近x件取得
-        activities = client.get_activities(0, 10000)
+        # activities = client.get_activities(0, 10000)
+        activities = client.get_activities(0, 3000)
         parsed_data = []
         for activity in activities:
             # running (ロード), treadmill_running (トレッドミル), trail_running (トレイル), track_running (トラック)
@@ -66,6 +210,7 @@ def fetch_and_sync_garmin():
             fastest_1mile_min = round(activity.get('fastestSplit_1609') / 60, 2) if activity.get('fastestSplit_1609') else None
             fastest_5km_min = round(activity.get('fastestSplit_5000') / 60, 2) if activity.get('fastestSplit_5000') else None
             fastest_10km_min = round(activity.get('fastestSplit_10000') / 60, 2) if activity.get('fastestSplit_10000') else None
+            calculated_trimp = calculate_trimp(duration_min, avg_hr)
 
             parsed_data.append({
                 "activity_id": activity['activityId'],
@@ -99,14 +244,12 @@ def fetch_and_sync_garmin():
                 "hr_z5": round(activity['hrTimeInZone_5'] / 60, 2) if activity.get('hrTimeInZone_5') else 0.0,
                 "aerobic_te": round(activity['aerobicTrainingEffect'], 2) if activity.get('aerobicTrainingEffect') else 0.0,
                 "anaerobic_te": round(activity['anaerobicTrainingEffect'], 2) if activity.get('anaerobicTrainingEffect') else 0.0,
-                "efficiency_score": round(efficiency, 2)
+                "efficiency_score": round(efficiency, 2),
+                "trimp": round(calculated_trimp, 1)
             })
-        return save_activities(parsed_data)
+        return save_activities(parsed_data, db_file)
     except Exception as e:
-        # 修正後: 犯人の顔写真を撮る！
         print("========== GARMIN SYNC ERROR TRACEBACK ==========")
-        print(f"Error Message: '{e}'")  # ここが空だったやつ
-        print(f"Error Type: {type(e)}")  # エラーの種類（TypeErrorなのかHTTPErrorなのか）
         traceback.print_exc()  # どこで起きたか全行表示
         print("=================================================")
         return 0
@@ -224,25 +367,108 @@ def generate_mock_if_empty(): pass # v2と同じなので省略。実データ�
 
 # --- API Endpoints ---
 @app.get("/api/sync")
-def trigger_sync(background_tasks: BackgroundTasks):
-    background_tasks.add_task(fetch_and_sync_garmin)
+def trigger_sync(background_tasks: BackgroundTasks,
+    user_id: int = Depends(get_current_user_id)
+                 ):
+    background_tasks.add_task(fetch_and_sync_garmin, user_id)
+    print(f"Sync request received for User ID: {user_id}")  # ログ確認用
     return {"message": "Sync started in background"}
 
 
 @app.get("/api/dashboard")
-def get_dashboard_data():
+def get_dashboard_data(user_id: int = Depends(get_current_user_id)):
     # データがなければモック
     generate_mock_if_empty()
 
-    df = get_all_activities()
+    db_file = f"user_data_{user_id}.db"
+    if not os.path.exists(db_file):
+        return []  # まだデータがない場合
+
+    df = get_all_activities(db_file)
 
     if df.empty:
         return {"stats": {}, "activities": [], "feedback": "データがないぞ。"}
 
+    # 1. 日付でソートして、インデックスにする
+    df['date_dt'] = pd.to_datetime(df['date'])
+    df = df.sort_values('date_dt')
+
+    df['day'] = df['date_dt'].dt.normalize()
+    # 2. 日ごとのTRIMP合計を計算 (1日2回走った場合などを合算)
+    daily_groups = df.groupby('day')['trimp'].sum()
+
+    # 3. 日付範囲を再構築 (休んだ日=TRIMP 0 の行を作る！)
+    #    これがないとMonotonyの標準偏差が計算できない
+    idx = pd.date_range(daily_groups.index.min(), daily_groups.index.max())
+    daily_df = daily_groups.reindex(idx, fill_value=0).to_frame(name='trimp')
+
+    # --- 指標計算 (日次データに対して実行) ---
+
+    # (1) CTL & ATL & TSB
+    daily_df['ctl'] = daily_df['trimp'].ewm(span=42, adjust=False).mean()
+    daily_df['atl'] = daily_df['trimp'].ewm(span=7, adjust=False).mean()
+    daily_df['tsb'] = daily_df['ctl'] - daily_df['atl']
+
+    # (2) A:C Ratio (ATL / CTL)
+    # ゼロ除算回避のため CTLが0なら0にする
+    daily_df['ac_ratio'] = np.where(daily_df['ctl'] > 0, daily_df['atl'] / daily_df['ctl'], 0.0)
+
+    # (3) Monotony (7日間平均 / 7日間標準偏差)
+    # rolling mean / rolling std
+    r7_mean = daily_df['trimp'].rolling(window=7, min_periods=1).mean()
+    r7_std = daily_df['trimp'].rolling(window=7, min_periods=1).std()
+
+    # stdが0（毎日同じTRIMP、または0続き）の場合、Monotonyが高くなりすぎないように制御
+    # ここでは便宜上、std=0ならMonotony=0とするか、上限キャップをつける
+    daily_df['monotony'] = np.where(r7_std > 0.1, r7_mean / r7_std, 0.0)
+
+    # (4) Training Strain (合計TRIMP * Monotony)
+    r7_sum = daily_df['trimp'].rolling(window=7, min_periods=1).sum()
+    daily_df['training_strain'] = r7_sum * daily_df['monotony']
+
+    # --- 計算結果を元の詳細データ(df)に戻す ---
+    # daily_df は「日付」がインデックスなので、それを結合キーにする
+    daily_df.index.name = 'day'
+
+    # dfにマージする (左結合)
+    df_merged = pd.merge(df, daily_df, on='day', how='left', suffixes=('', '_daily'))
+    # ※ trimp列が重複するので、daily側は計算用に使っただけ。
+    # 必要なのは ctl, atl, tsb, ac_ratio, monotony, training_strain
+
+    # (5) Marathon Shape (簡易版ロジック)
+    # Logic: CTL(基礎体力) + ロング走ボーナス
+    # ロング走ボーナス: 過去10週間で、20km以上走った距離のポイント化
+    # ※これはアクティビティ単位で見る必要がある
+
+    # 最近のロング走リスト (過去70日)
+    cutoff_date = df_merged['date_dt'].max() - timedelta(days=70)
+    long_runs = df_merged[
+        (df_merged['date_dt'] >= cutoff_date) &
+        (df_merged['distance_km'] >= 20.0)
+        ]
+
+    # ロング走スコア計算 (例: トップ3回の距離平均 * 係数)
+    long_run_score = 0
+    if not long_runs.empty:
+        top_3_dist = long_runs['distance_km'].nlargest(3).mean()
+        long_run_score = top_3_dist * 2.5  # 係数は適当に調整
+
+    # 現在のMarathon Shape
+    current_ctl = daily_df['ctl'].iloc[-1]
+    marathon_shape = round(current_ctl + long_run_score, 1)
+
+    # ==========================================
+    # 整形 & 返却
+    # ==========================================
+
+    # NaN対策
+    df_merged = df_merged.fillna(0)
+
+
     # ★ ラモス流・完全浄化プロセス
     # DataFrameを辞書リストに変換してから、1つずつ検査して NaN を None に変える
     # これなら Pandas のバージョンや挙動に左右されず確実に消せる
-    activities_list = df.to_dict(orient="records")
+    activities_list = df_merged.to_dict(orient="records")
     clean_activities = []
 
     for act in activities_list:
@@ -256,21 +482,37 @@ def get_dashboard_data():
         clean_activities.append(clean_act)
 
     # 統計値の計算 (ここも安全に)
-    avg_eff = df['efficiency_score'].mean()
-    recent_df = df.tail(7)
+    avg_eff = df_merged['efficiency_score'].mean()
+
+    wk_ago = df_merged['date_dt'].max() - timedelta(days=7)
+    recent_df = df_merged[df_merged['date_dt'] >= wk_ago]
     recent_eff = recent_df['efficiency_score'].mean()
     avg_pace = recent_df['pace_min_km'].mean()
 
     # 統計値が NaN なら 0.0 に置換
     stats = {
         "weekly_volume_km": round(recent_df['distance_km'].sum(), 1),
+        "avg_pace": round(avg_pace if not math.isnan(avg_eff) else 0.0, 2),
         "avg_efficiency": round(avg_eff if not math.isnan(avg_eff) else 0.0, 2),
-        "recent_efficiency": round(recent_eff if not math.isnan(recent_eff) else 0.0, 2)
+        "recent_efficiency": round(recent_eff if not math.isnan(recent_eff) else 0.0, 2),
+        "current_ctl": round(current_ctl, 1),
+        "current_tsb": round(daily_df['tsb'].iloc[-1], 1),
+        "marathon_shape": marathon_shape
     }
 
     feedback = "分析完了。"
     if stats["recent_efficiency"] > stats["avg_efficiency"]:
-        feedback = "良い傾向だ。効率が上がっている。"
+        feedback = "良い傾向だ。効率が上がっている。\n"
+
+    # アドバイス生成
+    latest_ac = daily_df['ac_ratio'].iloc[-1]
+    if latest_ac > 1.5:
+        feedback += "⚠️ 警告：A:C比が1.5を超えている！怪我のリスクが高い。負荷を落とせ。"
+    elif latest_ac < 0.8:
+        feedback += "負荷が足りない。もっと追い込めるぞ。"
+    else:
+        feedback += "良い負荷バランスだ。この調子で継続しろ。"
+
 
     return {
         "stats": stats,
@@ -280,9 +522,13 @@ def get_dashboard_data():
 
 # ★新設: 詳細データ取得API
 @app.get("/api/activity/{activity_id}")
-def get_activity_details_api(activity_id: int):
+def get_activity_details_api(activity_id: int, user_id: int = Depends(get_current_user_id)):
+    db_file = f"user_data_{user_id}.db"
+    if not os.path.exists(db_file):
+        return []  # まだデータがない場合
+
     # 1. まずDBを確認
-    streams = get_activity_stream(activity_id)
+    streams = get_activity_stream(activity_id, db_file)
     if streams:
         print(f"Serving activity {activity_id} from DB.")
         return {"activity_id": activity_id, "streams": streams}
@@ -293,7 +539,7 @@ def get_activity_details_api(activity_id: int):
         try:
             streams = fetch_garmin_details(activity_id)
             # DBに保存
-            save_activity_stream(activity_id, streams)
+            save_activity_stream(activity_id, streams, db_file)
             return {"activity_id": activity_id, "streams": streams}
         except Exception as e:
             print(f"Error fetching details: {e}")

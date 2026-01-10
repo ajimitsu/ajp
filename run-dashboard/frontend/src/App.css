@@ -14,3 +14,44 @@
 .close-btn { position: absolute; top: 10px; right: 15px; font-size: 24px; cursor: pointer; border:none; background:none;}
 .detail-chart-row { height: 200px; margin-bottom: 10px; }
 .chart-title { margin: 5px 0; font-size: 1em; font-weight:bold; color: #555; }
+
+
+/* src/App.css */
+
+.table-container {
+  margin: 20px auto;
+  width: 95%;
+  max-height: 300px; /* ここを超えたらスクロールする */
+  overflow-y: auto;
+  box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.activity-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.activity-table th {
+  background-color: #f4f4f4;
+  position: sticky; /* スクロールしてもヘッダーを固定 */
+  top: 0;
+  padding: 12px;
+  text-align: left;
+  font-weight: bold;
+  color: #333;
+  z-index: 10;
+}
+
+.activity-table td {
+  padding: 12px;
+  border-bottom: 1px solid #eee;
+  color: #555;
+}
+
+.activity-table tr:hover {
+  background-color: #f0f8ff; /* マウスを乗せたら光らせる */
+  cursor: pointer;
+}
