@@ -173,7 +173,7 @@ function App() {
 
     return activities
       // 1. そのSplitデータが存在し、0より大きいものだけ残す
-      .filter(a => a[key] !== undefined && a[key] !== null && a[key] > 0)
+      .filter(a => a.activity_type == "running" && a[key] !== undefined && a[key] !== null && a[key] > 0)
       // 2. タイムが速い順（昇順）に並べ替え
       .sort((a, b) => a[key] - b[key])
       // 3. 上位5つを取得
@@ -190,22 +190,53 @@ function App() {
   };
 
 
-    const getBestEfforts = (activities, minDist, maxDist, distanceKm) => {
-        if (!activities) return [];
-        return activities
-          .filter(a => a.distance_km >= minDist && a.distance_km <= maxDist) // 距離でフィルタ
-          .sort((a, b) => a.duration_min - b.duration_min) // タイムが速い順 (昇順)
-          .slice(0, 5)
-          .map(a => {
-            const duration_min = a.duration_min;
+const getBestEfforts = (activities, minDist, maxDist, distanceKm) => {
+    if (!activities) return [];
 
-            return {
-              ...a,
-              pb_display_time: formatDuration(duration_min), // 分に変換してフォーマット
-              pb_pace: formatPace(duration_min / distanceKm) // 分 / 距離 = ペース(min/km)
-            };
-          });
-      };
+    // 許容する停止時間の倍率 (例: 1.10 = 経過時間が移動時間の1.1倍までならOK)
+    // 1.05 (5%以内) ならかなり厳格。信号待ち1〜2回レベル。
+    // 1.10 (10%以内) ならトイレ休憩1回くらいは許されるかも。
+    const MAX_PAUSE_RATIO = 1.10;
+
+    return activities
+      .filter(a => {
+        // 1. ランニング判定
+        const isRun = a.activity_type == "running";
+
+        // 2. 距離フィルタ
+        const isDistOk = a.distance_km >= minDist && a.distance_km <= maxDist;
+
+        // 3. 【追加】ズルなしチェック (経過時間 vs 移動時間)
+        // elapsed_min がデータにない場合は、duration_min で代用(チェックしない)
+        const elapsed = a.elapsed_min || a.duration_min;
+        const duration = a.duration_min;
+
+        // 分母が0の事故を防ぐ
+        if (duration === 0) return false;
+
+        // 倍率を計算 (経過時間 / 移動時間)
+        const ratio = elapsed / duration;
+
+        // 経過時間が移動時間の 1.1倍 (10%増) 以内に収まっているか？
+        const isContinuous = ratio <= MAX_PAUSE_RATIO;
+
+        return isRun && isDistOk && isContinuous;
+      })
+      .sort((a, b) => a.duration_min - b.duration_min) // タイムが速い順
+      .slice(0, 5)
+      .map(a => {
+        // ここは変えなくてOK（PBとしては移動時間を採用するのが一般的だから）
+        const duration_min = a.duration_min;
+
+        return {
+          ...a,
+          pb_display_time: formatDuration(duration_min),
+          pb_pace: formatPace(duration_min / distanceKm),
+          // デバッグ用に「どれくらい休んだか」を表示してもいいな
+          pause_ratio: (a.elapsed_time_min / a.duration_min).toFixed(2)
+        };
+      });
+  };
 
   // 距離ごとのベスト5を取得
   // GPS誤差を考慮して少し幅を持たせているぞ (例: 5kmは 4.9~5.2km)
@@ -216,6 +247,7 @@ function App() {
   const bestHalf = getBestEfforts(processedData, 20.9, 21.4, 21.0975);
   const best30k = getBestEfforts(processedData, 29.8, 30.3, 30);
   const bestFull = getBestEfforts(processedData, 42.0, 42.8, 42.195);
+  const best100k = getBestEfforts(processedData, 98.0, 102.0, 100);
 
   // ※ キー名はバックエンドの実際のレスポンスに合わせて調整しろよ！
   const best1km = getBestSplits(processedData, 'fastestSplit_1km', 1);
@@ -226,7 +258,7 @@ function App() {
 return (
     <div className="App">
       {/* ログアウトボタンはヘッダーに入れたほうがスマートだが、一旦ここでもいい */}
-      <button onClick={handleLogout} style={{position:'absolute', top:10, right:10, zIndex:1000}}>Logout</button>
+      <button onClick={handleLogout} style={{position:'absolute', top:10, left:10, zIndex:1000}}>Logout</button>
 
       {/* ▼▼▼ 全体を包むメインコンテナ (ここからスタート) ▼▼▼ */}
       <div className="dashboard-container">
@@ -278,15 +310,6 @@ return (
         {/* 3. Key Stats Cards (上部に配置) */}
         <div className="stats-container" style={{ display: 'flex', gap: '15px', paddingBottom: '20px', flexWrap: 'wrap' }}>
 
-          {/* Marathon Shape */}
-          <div className="card" style={{ flex: 1, background: '#fff', padding: '15px', borderRadius: '8px', boxShadow: '0 2px 5px rgba(0,0,0,0.1)', minWidth: '150px', textAlign: 'center' }}>
-            <h3 style={{ margin: '0 0 10px 0', fontSize: '1.1em', color: '#444' }}>Marathon Shape</h3>
-            <div className="stat-value" style={{ fontSize: '2em', fontWeight: 'bold', color: '#2c3e50' }}>
-              {data.stats?.marathon_shape ?? '-'}
-            </div>
-            <p style={{ fontSize: '0.8em', color: '#666', margin: '5px 0 0 0' }}>Based on CTL & Long Runs</p>
-          </div>
-
           {/* Weekly Distance */}
           <div className="card" style={{ flex: 1, background: '#fff', padding: '15px', borderRadius: '8px', boxShadow: '0 2px 5px rgba(0,0,0,0.1)', minWidth: '150px', textAlign: 'center' }}>
             <h3 style={{ margin: '0 0 10px 0', fontSize: '1.1em', color: '#444' }}>Weekly Distance</h3>
@@ -296,34 +319,79 @@ return (
             <p style={{ fontSize: '0.8em', color: '#666', margin: '5px 0 0 0' }}>Last 7 Days (km)</p>
           </div>
 
+          {/* Weekly TRIMP */}
+          <div className="card" style={{ flex: 1, background: '#fff', padding: '15px', borderRadius: '8px', boxShadow: '0 2px 5px rgba(0,0,0,0.1)', minWidth: '150px', textAlign: 'center' }}>
+            <h3 style={{ margin: '0 0 10px 0', fontSize: '1.1em', color: '#444' }}>Weekly TRIMP</h3>
+            <div className="stat-value" style={{ fontSize: '2em', fontWeight: 'bold', color: '#2980b9' }}>
+              {data.stats?.weekly_trimp !== undefined ? Number(data.stats.weekly_trimp).toFixed(2) : '-'}
+            </div>
+            <p style={{ fontSize: '0.8em', color: '#666', margin: '5px 0 0 0' }}>Last 7 Days</p>
+          </div>
+
+
+          {/* A:C */}
+          <div className="card" style={{ flex: 1, background: '#fff', padding: '15px', borderRadius: '8px', boxShadow: '0 2px 5px rgba(0,0,0,0.1)', minWidth: '150px', textAlign: 'center' }}>
+            <h3 style={{ margin: '0 0 10px 0', fontSize: '1.1em', color: '#444' }}>怪我リスク　Current A:C Ratio</h3>
+            <div className="stat-value" style={{
+              fontSize: '2em', fontWeight: 'bold',
+              color: (data.stats?.latest_ac || 0) >= 0 ? '#27ae60' : '#c0392b'
+            }}>
+              {data.stats?.latest_ac !== undefined ? Number(data.stats.latest_ac).toFixed(2) : '-'}
+            </div>
+            <p style={{ fontSize: '0.8em', color: '#666', margin: '5px 0 0 0' }}>Aim to be 1.5-</p>
+          </div>
+
           {/* TSB */}
           <div className="card" style={{ flex: 1, background: '#fff', padding: '15px', borderRadius: '8px', boxShadow: '0 2px 5px rgba(0,0,0,0.1)', minWidth: '150px', textAlign: 'center' }}>
-            <h3 style={{ margin: '0 0 10px 0', fontSize: '1.1em', color: '#444' }}>Form (TSB)</h3>
+            <h3 style={{ margin: '0 0 10px 0', fontSize: '1.1em', color: '#444' }}>調子　TSB</h3>
             <div className="stat-value" style={{
               fontSize: '2em', fontWeight: 'bold',
               color: (data.stats?.current_tsb || 0) >= 0 ? '#27ae60' : '#c0392b'
             }}>
               {data.stats?.current_tsb !== undefined ? Number(data.stats.current_tsb).toFixed(2) : '-'}
             </div>
-            <p style={{ fontSize: '0.8em', color: '#666', margin: '5px 0 0 0' }}>Current TSB</p>
+            <p style={{ fontSize: '0.8em', color: '#666', margin: '5px 0 0 0' }}>Aim to be positive for race. Negative during training.</p>
           </div>
+
+          {/* Vo2Max */}
+          <div className="card" style={{ flex: 1, background: '#fff', padding: '15px', borderRadius: '8px', boxShadow: '0 2px 5px rgba(0,0,0,0.1)', minWidth: '150px', textAlign: 'center' }}>
+            <h3 style={{ margin: '0 0 10px 0', fontSize: '1.1em', color: '#444' }}>Effective Vo2Max</h3>
+            <div className="stat-value" style={{ fontSize: '2em', fontWeight: 'bold', color: '#2c3e50' }}>
+              {Number(data.stats?.eff_vo2max).toFixed(1) ?? '-'}
+            </div>
+            <p style={{ fontSize: '0.8em', color: '#666', margin: '5px 0 0 0' }}>Maximum in the last 90 Days</p>
+          </div>
+
 
           {/* CTL */}
           <div className="card" style={{ flex: 1, background: '#fff', padding: '15px', borderRadius: '8px', boxShadow: '0 2px 5px rgba(0,0,0,0.1)', minWidth: '150px', textAlign: 'center' }}>
-            <h3 style={{ margin: '0 0 10px 0', fontSize: '1.1em', color: '#444' }}>Fitness (CTL)</h3>
+            <h3 style={{ margin: '0 0 10px 0', fontSize: '1.1em', color: '#444' }}>基礎体力　CTL</h3>
             <div className="stat-value" style={{ fontSize: '2em', fontWeight: 'bold', color: '#2980b9' }}>
               {data.stats?.current_ctl !== undefined ? Number(data.stats.current_ctl).toFixed(2) : '-'}
             </div>
-            <p style={{ fontSize: '0.8em', color: '#666', margin: '5px 0 0 0' }}>Current CTL</p>
+            <p style={{ fontSize: '0.8em', color: '#666', margin: '5px 0 0 0' }}>Last 42 days training</p>
+          </div>
+
+          {/* Strain */}
+          <div className="card" style={{ flex: 1, background: '#fff', padding: '15px', borderRadius: '8px', boxShadow: '0 2px 5px rgba(0,0,0,0.1)', minWidth: '150px', textAlign: 'center' }}>
+            <h3 style={{ margin: '0 0 10px 0', fontSize: '1.1em', color: '#444' }}>Training Strain</h3>
+            <div className="stat-value" style={{ fontSize: '2em', fontWeight: 'bold', color: '#2980b9' }}>
+              {data.stats?.training_strain !== undefined ? Number(data.stats.training_strain).toFixed(2) : '-'}
+            </div>
+            <p style={{ fontSize: '0.8em', color: '#666', margin: '5px 0 0 0' }}>Training Strain</p>
           </div>
         </div>
-        {/* 4. Charts Section (表より先にグラフを見せるのが鉄則) */}
+
+
+
+        {/* 4. Metrics Guide (表を見る前のヒントとして配置) */}
+        <MetricsGuide />
+
+        {/* 5. Charts Section (表より先にグラフを見せるのが鉄則) */}
         <div className="charts-container" style={{ marginBottom: '30px' }}>
           <PerformanceChart data={processedData} onClick={handleChartClick} />
         </div>
 
-        {/* 5. Metrics Guide (表を見る前のヒントとして配置) */}
-        <MetricsGuide />
 
         {/* 6. Detailed Activity Table */}
         <div className="table-container">
@@ -378,7 +446,7 @@ return (
                   </td>
                   <td>
                     <span style={{ padding: '2px 6px', borderRadius: '4px', fontSize: '11px', backgroundColor: '#eee' }}>
-                      {activity.detected_type || 'RUN'}
+                      {activity.activity_type}
                     </span>
                   </td>
                 </tr>
@@ -413,6 +481,7 @@ return (
             <BestSplitTable title="Best Half Marathon" records={bestHalf} onSelect={handleChartClick} />
             <BestSplitTable title="Best 30km" records={best30k} onSelect={handleChartClick} />
             <BestSplitTable title="Best Full Marathon" records={bestFull} onSelect={handleChartClick} />
+            <BestSplitTable title="Best 100km" records={best100k} onSelect={handleChartClick} />
           </div>
         </div>
 

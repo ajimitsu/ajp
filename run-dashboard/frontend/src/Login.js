@@ -6,6 +6,8 @@ function Login({ onLogin }) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
 
+  const API_TOKEN = process.env.API_TOKEN || "http://localhost:8002/token";
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
@@ -14,7 +16,7 @@ function Login({ onLogin }) {
       params.append('username', username);
       params.append('password', password);
 
-      const res = await axios.post('http://localhost:8002/token', params);
+      const res = await axios.post("http://172.16.80.225:8002/token", params);
 
       // トークンを保存 (Local Storage)
       const token = res.data.access_token;
@@ -23,6 +25,7 @@ function Login({ onLogin }) {
       // 親コンポーネントに通知
       onLogin(token);
     } catch (err) {
+      console.error(err);
       setError('Login failed. Check your credentials.');
     }
   };

@@ -42,35 +42,11 @@ const MetricsGuide = () => {
             </ul>
           </div>
 
-          {/* Strain */}
-          <div className="guide-item">
-            <h4 style={{ margin: '0 0 5px 0', color: '#8e44ad' }}>Strain (身体ダメージ)</h4>
-            <p style={{ fontSize: '0.9em', color: '#555', margin:0 }}>
-              「負荷(Load) × 単調さ(Monotony)」。単調でハードな練習ほどダメージがデカい。
-            </p>
-            <ul style={{ fontSize: '0.85em', marginTop: '5px', paddingLeft: '20px' }}>
-              <li>高い数値が続いたら、完全休養か軽いJOGを入れろ。</li>
-            </ul>
-          </div>
-
-          {/* Efficiency */}
-          <div className="guide-item">
-            <h4 style={{ margin: '0 0 5px 0', color: '#27ae60' }}>Efficiency (ランニングエコノミー)</h4>
-            <p style={{ fontSize: '0.9em', color: '#555', margin:0 }}>
-              燃費の良さ。Speed / HeartRate 等で算出。
-            </p>
-            <ul style={{ fontSize: '0.85em', marginTop: '5px', paddingLeft: '20px' }}>
-              <li><strong>上昇傾向 ↗</strong>: ✅ 成長中 (同じ心拍で速く走れている)</li>
-              <li><strong>下降傾向 ↘</strong>: ⚠️ 疲労 or フォームの乱れ</li>
-              <li>目安: 1.3以上ならかなり優秀。</li>
-            </ul>
-          </div>
-
           {/* TRIMP */}
           <div className="guide-item">
             <h4 style={{ margin: '0 0 5px 0', color: '#2980b9' }}>TRIMP (トレーニング衝動)</h4>
             <p style={{ fontSize: '0.9em', color: '#555', margin:0 }}>
-              心拍数に基づいた「その日の練習のキツさ」のスコア。
+              心拍数に基づいた「その日の練習のキツさ」のスコア。時間(分) x 平均心拍数（Heart Rate Reserve） x 指数関数的重み付け
             </p>
             <ul style={{ fontSize: '0.85em', marginTop: '5px', paddingLeft: '20px' }}>
               <li><strong>50-100</strong>: つなぎの練習 (Recovery/Easy)</li>
@@ -79,11 +55,22 @@ const MetricsGuide = () => {
             </ul>
           </div>
 
+          {/* Strain */}
+          <div className="guide-item">
+            <h4 style={{ margin: '0 0 5px 0', color: '#8e44ad' }}>Training Strain (身体ダメージ)</h4>
+            <p style={{ fontSize: '0.9em', color: '#555', margin:0 }}>
+              「負荷(Load: 7 days total of TRIMP) × 単調さ(Monotony)」。単調でハードな練習ほどダメージがデカい。
+            </p>
+            <ul style={{ fontSize: '0.85em', marginTop: '5px', paddingLeft: '20px' }}>
+              <li>高い数値が続いたら、完全休養か軽いJOGを入れろ。</li>
+            </ul>
+          </div>
+
         {/* CTL (Fitness) */}
           <div className="guide-item">
             <h4 style={{ margin: '0 0 5px 0', color: '#2980b9' }}>CTL (体力・Fitness)</h4>
             <p style={{ fontSize: '0.9em', color: '#555', margin:0 }}>
-              Chronic Training Load。過去42日間の負荷の「積み上げ」。基礎体力を表す。
+              Chronic Training Load。過去42日間の負荷の「積み上げ」。42日間のTRIMP指数加重平均。基礎体力を表す。
             </p>
             <ul style={{ fontSize: '0.85em', marginTop: '5px', paddingLeft: '20px' }}>
               <li><strong>右肩上がり ↗</strong>: ✅ トレーニングが順調に積めている。</li>
@@ -96,7 +83,7 @@ const MetricsGuide = () => {
           <div className="guide-item">
             <h4 style={{ margin: '0 0 5px 0', color: '#e67e22' }}>ATL (疲労・Fatigue)</h4>
             <p style={{ fontSize: '0.9em', color: '#555', margin:0 }}>
-              Acute Training Load。直近7日間の「急激な負荷」。今の疲れ具合を表す。
+              Acute Training Load。直近7日間の「急激な負荷」。7日間のTRIMP指数加重平均。今の疲れ具合を表す。
             </p>
             <ul style={{ fontSize: '0.85em', marginTop: '5px', paddingLeft: '20px' }}>
               <li><strong>CTLより高い</strong>: 負荷をかけている時期（強化期）。</li>
@@ -115,6 +102,19 @@ const MetricsGuide = () => {
               <li><strong>プラス (+)</strong>: 元気 (レース向き)</li>
               <li><strong>マイナス (-)</strong>: 疲労蓄積 (トレーニング期)</li>
               <li><strong>レース当日</strong>: +5 〜 +15 を狙ってテーパリングしろ。</li>
+            </ul>
+          </div>
+
+          {/* Efficiency */}
+          <div className="guide-item">
+            <h4 style={{ margin: '0 0 5px 0', color: '#27ae60' }}>Efficiency (ランニングエコノミー)</h4>
+            <p style={{ fontSize: '0.9em', color: '#555', margin:0 }}>
+              燃費の良さ。Speed / HeartRate 等で算出。
+            </p>
+            <ul style={{ fontSize: '0.85em', marginTop: '5px', paddingLeft: '20px' }}>
+              <li><strong>上昇傾向 ↗</strong>: ✅ 成長中 (同じ心拍で速く走れている)</li>
+              <li><strong>下降傾向 ↘</strong>: ⚠️ 疲労 or フォームの乱れ</li>
+              <li>目安: 1.3以上ならかなり優秀。</li>
             </ul>
           </div>
 

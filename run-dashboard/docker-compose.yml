@@ -6,12 +6,12 @@ services:
       - "8002:8002"
     volumes:
       - ./backend:/app
-      - sqlite_data:/app/data
+      - ./backend/data:/app/data
     env_file:
       - .env
     environment:
       - USE_REAL_GARMIN=True
-      - DB_PATH=/app/data/running_log.db
+      - DB_PATH=/app/data/master_users.db
   frontend:
     build: ./frontend
     ports:
@@ -26,5 +26,4 @@ services:
       - REACT_APP_API_URL=${REACT_APP_API_URL}
       - WDS_SOCKET_HOST=${WDS_SOCKET_HOST}
       - WDS_SOCKET_PORT=${WDS_SOCKET_PORT}
-volumes:
-  sqlite_data:
+

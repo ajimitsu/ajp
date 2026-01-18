@@ -23,6 +23,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 30
 # --- トレーニング設定 (Ramos Config) ---
 USER_MAX_HR = 184   # 仮の値
 USER_REST_HR = 51   # 仮の値
+USER_STOPPED_HR = 100   # 仮の値
 MALE_GENDER = True  # 男ならTrue, 女ならFalse (係数が違う)
 
 # パスワードハッシュ化設定
@@ -31,9 +32,19 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 app = FastAPI()
 
+origins = [
+    "http://localhost:3000",        # PCのフロントエンド (旧)
+    "http://localhost:3002",        # PCのフロントエンド (新)
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:3002",
+    # 👇【重要】スマホからアクセスする時のURLを絶対に入れる！
+    "http://172.16.80.225:3000",
+    "http://172.16.80.225:3002",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -44,7 +55,7 @@ app.add_middleware(
 
 # 1. マスターDB（会員名簿）への接続
 def get_master_db():
-    conn = sqlite3.connect("master_users.db")
+    conn = sqlite3.connect("data/master_users.db")
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -99,7 +110,7 @@ def register(user: UserCreate):
         # 2. ★ここが重要！ そのユーザ専用のDBファイルを作成
         # テンプレート（空のDB）をコピーして、user_{id}.db を作る
         # テンプレートには 'activities' などのテーブル定義だけが入っている前提
-        db_filename = f"user_data_{user_id}.db"
+        db_filename = f"data/user_data_{user_id}.db"
         init_db(db_filename)
 
         return {"msg": "User created successfully", "user_id": user_id}
@@ -153,30 +164,79 @@ def get_garmin_client():
         return None
 
 
-def calculate_trimp(duration_min, avg_hr):
+def calculate_trimp(duration_min, moving_min, avg_hr):
     """
     TRIMP (Training Impulse) を計算する関数
     Banister's TRIMP formulaを使用
     """
     if not duration_min or not avg_hr or avg_hr < USER_REST_HR:
-        return 0.0
+        return None
+
+    if not moving_min or moving_min == None:
+        moving_min = duration_min
+
+    avg_hr_moving = (avg_hr * duration_min + USER_STOPPED_HR * (duration_min - moving_min)) / moving_min
 
     # 心拍予備能 (Heart Rate Reserve) の割合
-    hrr_ratio = (avg_hr - USER_REST_HR) / (USER_MAX_HR - USER_REST_HR)
+    hrr_ratio = (avg_hr_moving - USER_REST_HR) / (USER_MAX_HR - USER_REST_HR)
 
     # 男女で係数が違う
     b = 1.92 if MALE_GENDER else 1.67
 
+    if hrr_ratio <= 0.3: return None
+    if hrr_ratio > 1.05: hrr_ratio = 1.0
+
     # 公式: 時間(分) x 強度 x 指数関数的重み付け
-    trimp = duration_min * hrr_ratio * 0.64 * math.exp(b * hrr_ratio)
+    trimp = moving_min * hrr_ratio * 0.64 * math.exp(b * hrr_ratio)
 
     return trimp
+
+def calculate_eff_vo2max(dist_m, duration_min, moving_min, avg_hr, elapsed_min=None):
+    """
+    休憩時間が長すぎるデータを除外する機能付き VO2Max計算
+    elapsed_min: 経過時間（分）を追加で受け取る
+    """
+    # 1. 必須データのチェック
+    if not dist_m or not duration_min or not avg_hr:
+        return None
+
+    if not moving_min:
+        moving_min = duration_min
+
+    # 2. 【追加】 止め忘れ検知ガード (Stop Watch Dog)
+    # elapsed_min が渡されていて、かつ duration との乖離が大きすぎる場合
+    if elapsed_min:
+        # 休憩・停止時間が全体の15%を超えていたら「だらだらラン」か「止め忘れ」とみなす
+        # (例: 60分走って、合計9分以上止まっていたら除外)
+        stop_ratio = (elapsed_min - moving_min) / elapsed_min
+        if stop_ratio > 0.15:
+            return None
+
+    speed_m_min = dist_m / moving_min
+
+    oxygen_cost = (0.182258 * speed_m_min) + \
+                  (0.000104 * (speed_m_min ** 2)) - \
+                  4.60
+
+    if oxygen_cost <= 0: return None
+
+    avg_hr_moving = (avg_hr * duration_min + USER_STOPPED_HR * (duration_min - moving_min)) / moving_min
+    hrr_ratio = (avg_hr_moving - USER_REST_HR) / (USER_MAX_HR - USER_REST_HR)
+
+    if hrr_ratio <= 0.3: return None
+    if hrr_ratio > 1.05: hrr_ratio = 1.0
+
+    effective_vo2 = oxygen_cost / hrr_ratio
+
+    correction_factor = 1.0
+
+    return effective_vo2 * correction_factor
 
 # --- サマリー同期 ---
 def fetch_and_sync_garmin(user_id: int):
     print(f"--- [Background Task] Starting Sync for User ID: {user_id} ---")  # ログ追加
 
-    db_file = f"user_data_{user_id}.db"
+    db_file = f"data/user_data_{user_id}.db"
     if not os.path.exists(db_file):
         return []  # まだデータがない場合
 
@@ -187,20 +247,31 @@ def fetch_and_sync_garmin(user_id: int):
     try:
         # 直近x件取得
         # activities = client.get_activities(0, 10000)
-        activities = client.get_activities(0, 3000)
+        # activities = client.get_activities(0, 3000)
+        activities = client.get_activities(0, 600)
         parsed_data = []
         for activity in activities:
             # running (ロード), treadmill_running (トレッドミル), trail_running (トレイル), track_running (トラック)
             # これら全てを「ランニング」として認める。
             current_type = activity['activityType']['typeKey']
-            if current_type not in ['running', 'treadmill_running', 'trail_running', 'track_running', 'virtual_run']:
-                continue
+            # if current_type not in ['running', 'treadmill_running', 'trail_running', 'track_running', 'virtual_run']:
+            #     continue
             dist_m = activity.get('distance', 0)
-            duration_s = activity.get('duration', 1)
+            duration_s = activity.get('duration', 0)
             avg_hr = activity.get('averageHR', 0)
-            if dist_m == 0 or avg_hr == 0: continue
+
+            max_hr = round(activity.get('maxHR'), 0) if activity.get('maxHR') else None
+            moving_duration_s = round(activity.get('movingDuration'),2)  if activity.get('movingDuration') else None
+            elapsed_duration_s = round(activity.get('elapsedDuration'),2)  if activity.get('elapsedDuration') else None
+            vo2max = round(activity.get('vO2MaxValue'),1) if activity.get('vO2MaxValue') else None
+            vertical_oscillation = round(activity.get('verticalOscillation'), 2)  if activity.get('verticalOscillation') else None
+            ground_contact_time = round(activity.get('groundContactTime'), 2)  if activity.get('groundContactTime') else None
+
+            # if dist_m == 0 or avg_hr == 0: continue
             dist_km = dist_m / 1000
-            duration_min = duration_s / 60
+            duration_min = duration_s / 60 if duration_s else 0
+            elapsed_min = elapsed_duration_s / 60 if elapsed_duration_s else 0
+            moving_min = moving_duration_s / 60 if moving_duration_s else 0
             pace_min_km = duration_min / dist_km if dist_km > 0 else 0
             speed_m_min = dist_m / duration_min if duration_min > 0 else 0
             efficiency = speed_m_min / avg_hr if avg_hr > 0 else 0
@@ -210,7 +281,8 @@ def fetch_and_sync_garmin(user_id: int):
             fastest_1mile_min = round(activity.get('fastestSplit_1609') / 60, 2) if activity.get('fastestSplit_1609') else None
             fastest_5km_min = round(activity.get('fastestSplit_5000') / 60, 2) if activity.get('fastestSplit_5000') else None
             fastest_10km_min = round(activity.get('fastestSplit_10000') / 60, 2) if activity.get('fastestSplit_10000') else None
-            calculated_trimp = calculate_trimp(duration_min, avg_hr)
+            calculated_trimp = calculate_trimp(duration_min, moving_min, avg_hr)
+            eff_vo2max = calculate_eff_vo2max(dist_m, duration_min, moving_min, avg_hr, elapsed_min) if current_type in ['running', 'treadmill_running', 'trail_running', 'track_running', 'virtual_run'] else None
 
             parsed_data.append({
                 "activity_id": activity['activityId'],
@@ -223,18 +295,26 @@ def fetch_and_sync_garmin(user_id: int):
                 "aerobic_te_message": activity.get('aerobicTrainingEffectMessage', ""),
                 "anaerobic_te_message": activity.get('anaerobicTrainingEffectMessage', ""),
                 "date": activity['startTimeLocal'],
-                "distance_km": round(dist_km, 2),
-                "duration_min": round(duration_min, 2),
-                "avg_hr": round(avg_hr, 1),
-                "pace_min_km": round(pace_min_km, 2),
-                "avg_pitch_spm": round(pitch, 1),
-                "avg_stride_cm": round(avg_stride, 2),
+                "distance_km": dist_km,
+                "duration_s": duration_s,
+                "elapsed_min": elapsed_min,
+                "duration_min": duration_min,
+                "avg_hr": avg_hr,
+                "max_hr": max_hr,
+                "moving_duration_s": moving_duration_s,
+                "elapsed_duration_s": elapsed_duration_s,
+                "vo2max": vo2max,
+                "vertical_oscillation": vertical_oscillation,
+                "ground_contact_time": ground_contact_time,
+                "pace_min_km": pace_min_km,
+                "avg_pitch_spm": pitch,
+                "avg_stride_cm": avg_stride,
                 "calories": activity['calories'],
-                "speed_m_min": round(speed_m_min, 1),
-                "fastestSplit_1000": fastest_1km_min,
-                "fastestSplit_1609": fastest_1mile_min,
-                "fastestSplit_5000": fastest_5km_min,
-                "fastestSplit_10000": fastest_10km_min,
+                "speed_m_min": speed_m_min,
+                "fastestSplit_1km": fastest_1km_min,
+                "fastestSplit_1mile": fastest_1mile_min,
+                "fastestSplit_5km": fastest_5km_min,
+                "fastestSplit_10km": fastest_10km_min,
                 "elevation_gain": round(activity.get('elevationGain'), 1) if activity.get('elevationGain') else 0.0,
                 "elevation_loss": round(activity.get('elevationLoss'), 1) if activity.get('elevationLoss') else 0.0,
                 "hr_z1": round(activity['hrTimeInZone_1'] / 60, 2) if activity.get('hrTimeInZone_1') else 0.0,
@@ -244,10 +324,13 @@ def fetch_and_sync_garmin(user_id: int):
                 "hr_z5": round(activity['hrTimeInZone_5'] / 60, 2) if activity.get('hrTimeInZone_5') else 0.0,
                 "aerobic_te": round(activity['aerobicTrainingEffect'], 2) if activity.get('aerobicTrainingEffect') else 0.0,
                 "anaerobic_te": round(activity['anaerobicTrainingEffect'], 2) if activity.get('anaerobicTrainingEffect') else 0.0,
-                "efficiency_score": round(efficiency, 2),
-                "trimp": round(calculated_trimp, 1)
+                "efficiency_score": round(efficiency, 2)  if efficiency else 0.0,
+                "trimp": round(calculated_trimp, 1) if calculated_trimp else 0.0,
+                "eff_vo2max": round(eff_vo2max, 2) if eff_vo2max else 0.0
             })
-        return save_activities(parsed_data, db_file)
+
+        headers = list(parsed_data[0].keys())
+        return save_activities(parsed_data, headers, db_file)
     except Exception as e:
         print("========== GARMIN SYNC ERROR TRACEBACK ==========")
         traceback.print_exc()  # どこで起きたか全行表示
@@ -362,9 +445,6 @@ def fetch_garmin_details(activity_id):
     print(f"Processed {len(processed_streams)} points for activity {activity_id}")
     return processed_streams
 
-# --- モック生成 (省略) ---
-def generate_mock_if_empty(): pass # v2と同じなので省略。実データ推奨。
-
 # --- API Endpoints ---
 @app.get("/api/sync")
 def trigger_sync(background_tasks: BackgroundTasks,
@@ -375,12 +455,100 @@ def trigger_sync(background_tasks: BackgroundTasks,
     return {"message": "Sync started in background"}
 
 
+def generate_training_advice(current_ctl, avg_vo2max, weekly_distance, weekly_trimp, target_time_str="Sub 3.5"):
+    """
+    現在のCTLと目標タイムから、今週の推奨TRIMPを計算する鬼コーチロジック
+    """
+
+    # 1. 目標設定のマッピング
+    benchmarks = {
+        # --- エリート市民ランナーの壁 (月間 350-450km) ---
+        "Sub 2:50": {"target_ctl": 115, "min_vo2": 62, "desc": "ガチ勢。スピードとスタミナの完全融合が必要。"},
+
+        # --- サブ3の聖域 (月間 300-400km) ---
+        "Sub 3": {"target_ctl": 100, "min_vo2": 58, "desc": "市民ランナーの勲章。誤魔化しが効かない領域。"},
+        "Sub 3:00": {"target_ctl": 100, "min_vo2": 58, "desc": "市民ランナーの勲章。誤魔化しが効かない領域。"},
+
+        # --- 上級者の入り口 (月間 250-350km) ---
+        "Sub 3.25": {"target_ctl": 85, "min_vo2": 54, "desc": "サブ3.5を卒業した猛者。キロ4:30巡行の安定感。"},
+        "Sub 3:15": {"target_ctl": 85, "min_vo2": 54, "desc": "サブ3.5を卒業した猛者。キロ4:30巡行の安定感。"},
+
+        # --- 本格派ランナーの基準 (月間 200-300km) ---
+        "Sub 3.5": {"target_ctl": 75, "min_vo2": 49, "desc": "脱・初心者。LSDだけでなく閾値走(LT)が必須になる。"},
+        "Sub 3:30": {"target_ctl": 75, "min_vo2": 49, "desc": "脱・初心者。LSDだけでなく閾値走(LT)が必須になる。"},
+
+        # --- 中級者の壁 (月間 150-250km) ---
+        "Sub 3.75": {"target_ctl": 65, "min_vo2": 45, "desc": "歩かずに完走するスタミナと、基礎スピードの向上。"},
+        "Sub 3:45": {"target_ctl": 65, "min_vo2": 45, "desc": "歩かずに完走するスタミナと、基礎スピードの向上。"},
+
+        # --- サブ4 (月間 120-200km) ---
+        "Sub 4": {"target_ctl": 55, "min_vo2": 41, "desc": "多くのランナーの第一目標。継続的なジョグ習慣の証明。"},
+        "Sub 4:00": {"target_ctl": 55, "min_vo2": 41, "desc": "多くのランナーの第一目標。継続的なジョグ習慣の証明。"},
+
+        # --- 完走＋α (月間 100-150km) ---
+        "Sub 4:15": {"target_ctl": 45, "min_vo2": 38, "desc": "ハーフマラソンを余裕を持って走れる基礎体力。"},
+        "Sub 4:30": {"target_ctl": 38, "min_vo2": 36, "desc": "30kmの壁を越えるための最低限の走り込み。"},
+
+        # --- 完走狙い (月間 60-100km) ---
+        "Finish": {"target_ctl": 30, "min_vo2": 34, "desc": "まずは怪我なく42km動き続ける身体作り。"}
+    }
+
+
+
+    target_data = benchmarks.get(target_time_str, benchmarks["Sub 4"])
+    target_ctl = target_data["target_ctl"]
+    target_vo2max = target_data["min_vo2"]
+
+    # ★ラモス流・安全係数★
+    # 足底筋膜炎のリスクを考慮し、CTLが低いときほど慎重に
+    ramp_factor = 30  # 基本は +30 TRIMP
+
+    # 推奨される1日のTRIMP (Current CTL + 30)
+    daily_target = current_ctl + ramp_factor
+
+    # 週間目標 (単純計算)
+    weekly_target = daily_target * 7
+
+
+    # 2. ギャップ分析
+    ctl_gap = target_ctl - current_ctl
+    vo2_gap = target_vo2max - avg_vo2max
+    trimp_gap = weekly_target - weekly_trimp
+
+
+    advice = {}
+
+    if ctl_gap <= 0 and vo2_gap <= 0:
+        # 目標CTLに到達している場合
+        advice["status"] = "MAINTAIN"
+        advice["daily_trimp_target"] = round(current_ctl)  # 維持でOK
+        advice["daily_vo2max_target"] = round(avg_vo2max)  # 維持でOK
+        advice[
+            "message"] = f"{target_time_str}: CTL/VO2Maxは目標の{target_ctl}/{target_vo2max} に到達しているぞ！今は調整期か？無理に上げすぎず、強度（Pace/Interval）を磨け。今週の週合計 TRIMP {round(weekly_target)} で今週は{round(trimp_gap)}足りてない。"
+
+
+    else:
+        # まだ足りない場合（ビルドアップ期）
+        advice["status"] = "BUILD"
+        advice["daily_trimp_target"] = round(daily_target)
+        advice["weekly_trimp_target"] = round(weekly_target)
+
+        advice["message"] = (
+            f"目標の{target_time_str}: CTL/VO2Maxは目標の{target_ctl}/{target_vo2max} にはまだ基礎体力が足りん！\n"
+            f"継続的な走力向上には週合計 TRIMP {round(weekly_target)}が目標で、"
+            f"1日あたり平均 TRIMP {round(daily_target)} だ。今週は{round(trimp_gap)}足りてない。\n"
+            f"急に増やすなよ？怪我したら元も子もないからな。"
+        )
+
+    return advice
+
+
+
+
 @app.get("/api/dashboard")
 def get_dashboard_data(user_id: int = Depends(get_current_user_id)):
-    # データがなければモック
-    generate_mock_if_empty()
 
-    db_file = f"user_data_{user_id}.db"
+    db_file = f"data/user_data_{user_id}.db"
     if not os.path.exists(db_file):
         return []  # まだデータがない場合
 
@@ -425,6 +593,8 @@ def get_dashboard_data(user_id: int = Depends(get_current_user_id)):
     # (4) Training Strain (合計TRIMP * Monotony)
     r7_sum = daily_df['trimp'].rolling(window=7, min_periods=1).sum()
     daily_df['training_strain'] = r7_sum * daily_df['monotony']
+    training_strain = daily_df['training_strain'].iloc[-1]
+
 
     # --- 計算結果を元の詳細データ(df)に戻す ---
     # daily_df は「日付」がインデックスなので、それを結合キーにする
@@ -462,7 +632,7 @@ def get_dashboard_data(user_id: int = Depends(get_current_user_id)):
     # ==========================================
 
     # NaN対策
-    df_merged = df_merged.fillna(0)
+    # df_merged = df_merged.fillna(0)
 
 
     # ★ ラモス流・完全浄化プロセス
@@ -482,36 +652,71 @@ def get_dashboard_data(user_id: int = Depends(get_current_user_id)):
         clean_activities.append(clean_act)
 
     # 統計値の計算 (ここも安全に)
-    avg_eff = df_merged['efficiency_score'].mean()
+    three_month_ago = datetime.now() - timedelta(days=90)
+    month_df = df_merged[df_merged['date_dt'] >= three_month_ago]
+    avg_eff = month_df['efficiency_score'].nlargest(5).mean()
 
-    wk_ago = df_merged['date_dt'].max() - timedelta(days=7)
-    recent_df = df_merged[df_merged['date_dt'] >= wk_ago]
-    recent_eff = recent_df['efficiency_score'].mean()
+    week_ago = datetime.now() - timedelta(days=7)
+    recent_df = df_merged[df_merged['date_dt'] >= week_ago]
+
+
+    valid_eff_df = df_merged[
+        (df_merged['efficiency_score'].notna()) &
+        (df_merged['efficiency_score'] > 0)
+        ]
+
+    # 2. 日付の新しい順（降順）に並べ替えて、上から5つだけ取る (Sort & Head)
+    target_runs = valid_eff_df.sort_values('date_dt', ascending=False).head(5)
+
+    # 3. その5つの平均を計算する
+    recent_eff = target_runs['efficiency_score'].mean()
     avg_pace = recent_df['pace_min_km'].mean()
 
-    # 統計値が NaN なら 0.0 に置換
-    stats = {
-        "weekly_volume_km": round(recent_df['distance_km'].sum(), 1),
-        "avg_pace": round(avg_pace if not math.isnan(avg_eff) else 0.0, 2),
-        "avg_efficiency": round(avg_eff if not math.isnan(avg_eff) else 0.0, 2),
-        "recent_efficiency": round(recent_eff if not math.isnan(recent_eff) else 0.0, 2),
-        "current_ctl": round(current_ctl, 1),
-        "current_tsb": round(daily_df['tsb'].iloc[-1], 1),
-        "marathon_shape": marathon_shape
-    }
 
-    feedback = "分析完了。"
-    if stats["recent_efficiency"] > stats["avg_efficiency"]:
-        feedback = "良い傾向だ。効率が上がっている。\n"
+    avg_vo2max = month_df['vo2max'].nlargest(5).mean()
+    avg_eff_vo2max = month_df['eff_vo2max'].nlargest(5).mean()
+
+    weekly_distance = recent_df['distance_km'].sum()
+    weekly_trimp = recent_df['trimp'].sum()
+    feedback = "分析完了。\n"
+
+    target_time_str = "Sub 3.5"
+    running_advice = generate_training_advice(current_ctl, avg_eff_vo2max, weekly_distance, weekly_trimp, target_time_str)
+    feedback += running_advice["message"] + "\n"
+
+
+    if recent_eff > avg_eff:
+        feedback += f"心肺機能が上がっている。直近のランニングエコノミー{round(recent_eff,2)}で３か月平均値{round(avg_eff,2)}を上回っている。\n"
+    else:
+        feedback += f"心肺機能が落ちている。直近のランニングエコノミー{round(recent_eff,2)}で３か月平均値{round(avg_eff,2)}を下回っている。\n"
 
     # アドバイス生成
     latest_ac = daily_df['ac_ratio'].iloc[-1]
     if latest_ac > 1.5:
-        feedback += "⚠️ 警告：A:C比が1.5を超えている！怪我のリスクが高い。負荷を落とせ。"
+        feedback += "⚠️ 警告：A:C比が1.5を超えている！怪我のリスクが高い。トレーニング負荷を落とせ。"
     elif latest_ac < 0.8:
-        feedback += "負荷が足りない。もっと追い込めるぞ。"
+        feedback += "トレーニング負荷が足りない。もっと追い込めるぞ。"
     else:
-        feedback += "良い負荷バランスだ。この調子で継続しろ。"
+        feedback += "トレーニング負荷は良いバランスだ。この調子で継続しろ。"
+
+
+    # 統計値が NaN なら 0.0 に置換
+    stats = {
+        "weekly_volume_km": round(weekly_distance, 2),
+        "weekly_trimp": round(weekly_trimp, 2),
+        "avg_pace": round(avg_pace if not math.isnan(avg_eff) else 0.0, 2),
+        "avg_efficiency": round(avg_eff if not math.isnan(avg_eff) else 0.0, 2),
+        "recent_efficiency": round(recent_eff if not math.isnan(recent_eff) else 0.0, 2),
+        "latest_ac": round(latest_ac, 1),
+        "training_strain": round(training_strain, 0),
+        "current_ctl": round(current_ctl, 1),
+        "current_tsb": round(daily_df['tsb'].iloc[-1], 1),
+        "vo2max": round(avg_vo2max if not math.isnan(avg_vo2max) else 0.0, 2),
+        "eff_vo2max": round(avg_eff_vo2max if not math.isnan(avg_eff_vo2max) else 0.0, 2),
+        "marathon_shape": marathon_shape
+    }
+
+
 
 
     return {
@@ -523,7 +728,7 @@ def get_dashboard_data(user_id: int = Depends(get_current_user_id)):
 # ★新設: 詳細データ取得API
 @app.get("/api/activity/{activity_id}")
 def get_activity_details_api(activity_id: int, user_id: int = Depends(get_current_user_id)):
-    db_file = f"user_data_{user_id}.db"
+    db_file = f"data/user_data_{user_id}.db"
     if not os.path.exists(db_file):
         return []  # まだデータがない場合
 

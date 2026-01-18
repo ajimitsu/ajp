@@ -2,3 +2,7 @@
 /financial-dashboard/backend/financial_app.db
 /financial-dashboard/frontend/.env
 /run-dashboard/.env
+/run-dashboard/backend/master_users.db
+/run-dashboard/backend/user_data_1.db
+/run-dashboard/frontend/.env
+/ai_agent/.env
