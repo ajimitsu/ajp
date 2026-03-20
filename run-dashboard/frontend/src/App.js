@@ -312,7 +312,7 @@ return (
 
           {/* Weekly Distance */}
           <div className="card" style={{ flex: 1, background: '#fff', padding: '15px', borderRadius: '8px', boxShadow: '0 2px 5px rgba(0,0,0,0.1)', minWidth: '150px', textAlign: 'center' }}>
-            <h3 style={{ margin: '0 0 10px 0', fontSize: '1.1em', color: '#444' }}>Weekly Distance</h3>
+            <h3 style={{ margin: '0 0 10px 0', fontSize: '1.1em', color: '#444' }}>Weekly Equivalent Distance</h3>
             <div className="stat-value" style={{ fontSize: '2em', fontWeight: 'bold', color: '#2980b9' }}>
               {data.stats?.weekly_volume_km !== undefined ? Number(data.stats.weekly_volume_km).toFixed(2) : '-'}
             </div>
@@ -362,6 +362,24 @@ return (
             <p style={{ fontSize: '0.8em', color: '#666', margin: '5px 0 0 0' }}>Maximum in the last 90 Days</p>
           </div>
 
+          {/* Marathon Shape */}
+          <div className="card" style={{ flex: 1, background: '#fff', padding: '15px', borderRadius: '8px', boxShadow: '0 2px 5px rgba(0,0,0,0.1)', minWidth: '150px', textAlign: 'center' }}>
+            <h3 style={{ margin: '0 0 10px 0', fontSize: '1.1em', color: '#444' }}>Marathon Shape</h3>
+            <div className="stat-value" style={{ fontSize: '2em', fontWeight: 'bold', color: '#2c3e50' }}>
+              {Number(data.stats?.marathon_shape).toFixed(1) ?? '-'}
+            </div>
+            <p style={{ fontSize: '0.8em', color: '#666', margin: '5px 0 0 0' }}>Marathon shape</p>
+          </div>
+
+
+          {/* ATL */}
+          <div className="card" style={{ flex: 1, background: '#fff', padding: '15px', borderRadius: '8px', boxShadow: '0 2px 5px rgba(0,0,0,0.1)', minWidth: '150px', textAlign: 'center' }}>
+            <h3 style={{ margin: '0 0 10px 0', fontSize: '1.1em', color: '#444' }}>疲労度　ATL</h3>
+            <div className="stat-value" style={{ fontSize: '2em', fontWeight: 'bold', color: '#2980b9' }}>
+              {data.stats?.current_atl !== undefined ? Number(data.stats.current_atl).toFixed(2) : '-'}
+            </div>
+            <p style={{ fontSize: '0.8em', color: '#666', margin: '5px 0 0 0' }}>Last 7 days training</p>
+          </div>
 
           {/* CTL */}
           <div className="card" style={{ flex: 1, background: '#fff', padding: '15px', borderRadius: '8px', boxShadow: '0 2px 5px rgba(0,0,0,0.1)', minWidth: '150px', textAlign: 'center' }}>

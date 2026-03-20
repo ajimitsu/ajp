@@ -118,6 +118,20 @@ const MetricsGuide = () => {
             </ul>
           </div>
 
+          {/* Marathon Shape */}
+          <div className="guide-item">
+            <h4 style={{ margin: '0 0 5px 0', color: '#27ae60' }}>Marathon Shape (マラソンシェイプ)</h4>
+            <p style={{ fontSize: '0.9em', color: '#555', margin:0 }}>
+              CTL CTL(基礎体力) + (過去10週間でのトップ3回のロング走20+km距離平均 × 2.5)で算出。
+            </p>
+            <ul style={{ fontSize: '0.85em', marginTop: '5px', paddingLeft: '20px' }}>
+              <li><strong>80 〜 110</strong>: 完走 〜 サブ4.5レベル</li>
+              <li><strong>115 〜 145</strong>: サブ4 レベル</li>
+              <li><strong>150 〜 180</strong>: サブ3.5 レベル</li>
+              <li><strong>190 〜 220+</strong>: サブ3 レベル</li>
+            </ul>
+          </div>
+
         </div>
       </details>
     </div>

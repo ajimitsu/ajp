@@ -3,10 +3,12 @@ import os
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 
+const apiKey = .env.REACT_APP_GOOGLE_API_KEY;
+
 # APIキーの設定（Google AI Studioで取得したもの）
 # 環境変数にセットするのが鉄則だが、ここではわかりやすく直接書く場所も示しておく
 if "GOOGLE_API_KEY" not in os.environ:
-    os.environ["GOOGLE_API_KEY"] = "AIzaSyDb9-An1ffE-9XhySD0CqzwZMyJGUqAAag"
+    os.environ["GOOGLE_API_KEY"] = ""
 
 # 【変更点2】脳みそをGeminiに換装
 # model="gemini-1.5-pro" (賢い) または "gemini-1.5-flash" (爆速)
